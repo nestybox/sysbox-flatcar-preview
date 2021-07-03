@@ -1,0 +1,601 @@
+#!/bin/bash
+
+#
+# Copyright 2019-2021 Nestybox, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    https:#www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+#
+# Configure Docker to use Sysbox.
+#
+# Type "sudo ./docker-cfg --help". for usage info.
+#
+
+progname=$(basename $0)
+
+config_only=0
+verbose=0
+dry_run=0
+force_restart=0
+
+systemd_reload_daemon=0
+
+# Dockerd default configuration dir/file.
+dockerCfgDir="/etc/docker"
+dockerCfgFile="${dockerCfgDir}/daemon.json"
+
+# Docker config vars.
+docker_network_config_changed="false"
+docker_userns_config_changed="false"
+docker_runtime_config_changed="false"
+docker_cgroup_config_changed="false"
+
+dockerd=$(which dockerd)
+
+# Location of sysbox binaries
+# NOTE: in flatcar, Sysbox is placed in /opt/bin (not in /usr/bin as /usr is read-only).
+sysbox_bin_dir="/opt/bin"
+
+# Temp copy of the docker daemon.json file
+tmpCfgFile=$(mktemp /tmp/docker-cfg.XXXXXX)
+trap 'rm -f "${tmpCfgFile}"' EXIT
+
+# Temp file for jq write operations.
+tmpJqFile=$(mktemp /tmp/docker-cfg-jq.XXXXXX)
+trap 'rm -f "${tmpJqFile}"' EXIT
+
+# Log helper
+function log() {
+	if [ "$verbose" -eq 1 ]; then
+		printf "$1"
+	fi
+}
+
+# Retry a command $1 times until it succeeds. Wait $2 seconds between retries.
+# (copied from runc/tests/integration/helpers.bash)
+function retry() {
+	local attempts=$1
+	shift
+	local delay=$1
+	shift
+	local i
+
+	for ((i = 0; i < attempts; i++)); do
+		$@ > /dev/null 2>&1
+		if [ "$?" -eq 0 ]; then
+			return 0
+		fi
+		sleep $delay
+	done
+
+	echo "Command \"$@\" failed $attempts times. Output: $?"
+	return 1
+}
+
+# Returns true if dockerd is running
+function dockerd_running() {
+	docker ps > /dev/null 2>&1
+}
+
+# Returns true if dockerd is stopped
+function dockerd_stopped() {
+   ! pgrep $dockerd
+}
+
+# Restarts dockerd manually (if it's running).
+function dockerd_manual_restart() {
+	if dockerd_pid=$(pidof $dockerd); then
+		dockerd_cmd=$(ps -eo args | grep $dockerd | head -n 1)
+
+		kill -s SIGTERM $dockerd_pid
+		retry 10 1 dockerd_stopped
+		if [ $? -ne 0 ]; then
+			printf "Failed to stop Docker. Please stop and restart manually to apply config.\n"
+			exit 1
+		fi
+
+		rm -f /var/run/docker.pid
+		$dockerd_cmd > /var/log/dockerd.log 2>&1 &
+
+		retry 10 1 dockerd_running
+		if [ $? -ne 0 ]; then
+			printf "Failed to restart Docker. Please restart manually to apply config.\n"
+			exit 1
+		fi
+
+	fi
+}
+
+# Stops and removes any existing Docker containers
+function docker_remove_containers() {
+	docker_conts=$(docker ps -aq)
+	if [[ "$docker_conts" != "" ]]; then
+		ret=$(docker stop -t0 $(docker ps -aq))
+	fi
+
+	docker_conts=$(docker ps -aq)
+	if [[ "$docker_conts" != "" ]]; then
+		ret=$(docker rm -f $(docker ps -aq))
+	fi
+}
+
+#
+# Returns 'true' if passed ipv4 address overlaps with any of the system local
+# subnets. Return 'false' otherwise.
+#
+function system_local_subnet() {
+   if ip route get ${1} | egrep -q "via $(ip route | awk '/default/ {print $3}')"; then
+      return 1
+   fi
+   return 0
+}
+
+# Returns 'true' if host is managed by systemd; false otherwise.
+function systemd_host() {
+	ret=$(ps --no-headers -o comm 1)
+	if [[ "$ret" == "systemd" ]]; then
+		return 0
+	fi
+	return 1
+}
+
+function docker_config_network_bip() {
+
+   jq --arg bip ${bip_subnet} --indent 4 '. + {"bip": $bip}' ${tmpCfgFile} \
+		> ${tmpJqFile} && cp ${tmpJqFile} ${tmpCfgFile}
+
+	docker_network_config_changed="true"
+
+	log "Docker config: configured bridge-ip network to $bip_subnet.\n"
+}
+
+function docker_config_network_pool() {
+
+	jq --arg subnet ${pool_subnet} --indent 4 \
+		'."default-address-pools"[0] |= . + {"base": $subnet, "size": 24}' ${tmpCfgFile} \
+		> ${tmpJqFile} && cp ${tmpJqFile} ${tmpCfgFile}
+
+	docker_network_config_changed="true"
+
+	log "Docker config: configured default-address-pool to $pool_subnet.\n"
+}
+
+function docker_check_network_config() {
+	local subnet
+
+	# If bip address overlaps with an existing local subnet, then
+	# dump a warning message to the user.
+	subnet=""
+
+	if [ -n "$bip_subnet" ]; then
+		subnet=${bip_subnet}
+	else
+		if [ -f ${dockerCfgFile} ]; then
+			subnet=$(jq '.bip' ${dockerCfgFile})
+		fi
+	fi
+
+	if [[ "$subnet" != "" ]] && [[ "$subnet" != "null" ]]; then
+		subnet=$(echo $subnet | tr -d '"')
+		local bip_ip=$(echo ${subnet} | cut -d'/' -f 1)
+		if dockerd_running && system_local_subnet ${bip_ip} &&
+				! ip -4 address show dev docker0 | egrep -q "${bip_subnet}"; then
+			echo -e "WARN: Docker bridge-ip network (${subnet}) overlaps"\
+				  "with existing system subnet. Try another subnet to avoid connectivity issues."
+			return 1
+		fi
+	fi
+
+	# Same as above but for default-address-pool
+	subnet=""
+
+	if [ -n "$pool_subnet" ]; then
+		subnet=${pool_subnet}
+	else
+		if [ -f ${dockerCfgFile} ]; then
+			subnet=$(jq '."default-address-pools" | .[0] | ."base"' ${dockerCfgFile})
+		fi
+	fi
+
+	if [[ "$subnet" != "" ]] && [[ "$subnet" != "null" ]]; then
+		subnet=$(echo $subnet | tr -d '"')
+		local pool_ip=$(echo ${subnet} | cut -d'/' -f 1)
+		if system_local_subnet ${pool_ip}; then
+			echo -e "WARN: Docker default-address-pool to configure (${subnet}) overlaps"\
+				  "with existing system subnet. Try another IP range to avoid connectivity issues."
+			return 1
+		fi
+	fi
+
+	return 0
+}
+
+function docker_config_network() {
+
+	docker_check_network_config
+	if [ $? -ne 0 ]; then
+		printf "INFO: Refusing to configure Docker networking due to IP address overlap with existing system subnet(s).\n"
+		return
+	fi
+
+	if [ -n "$bip_subnet" ]; then
+		docker_config_network_bip
+	fi
+
+	if [ -n "$pool_subnet" ]; then
+		docker_config_network_pool
+	fi
+}
+
+ function docker_config_runtime() {
+
+	 if [[ "$sysbox_runtime" == "enable" ]]; then
+
+		 # If no 'runtimes' key-entry is present, proceed to add one.
+		 if [ $(jq 'has("runtimes")' ${tmpCfgFile}) = "false" ]; then
+			 jq --indent 4 '. + {"runtimes": {"sysbox-runc": {"path": "${sysbox_bin_dir}/sysbox-runc"}}}' \
+             ${tmpCfgFile} > ${tmpJqFile} && cp ${tmpJqFile} ${tmpCfgFile}
+
+			 docker_runtime_config_changed="true"
+
+			 # If no 'sysbox-runc' runtime entry is present, proceed to add it.
+		 elif [ $(jq '.runtimes | has("sysbox-runc")' ${tmpCfgFile}) = "false" ]; then
+			 jq --indent 4 '.runtimes |= . + {"sysbox-runc": {"path": "${sysbox_bin_dir}/sysbox-runc"}}' \
+             ${tmpCfgFile} > ${tmpJqFile} && cp ${tmpJqFile} ${tmpCfgFile}
+
+			 docker_runtime_config_changed="true"
+		 fi
+
+		 if [ ${docker_runtime_config_changed} = true ]; then
+			 log "Docker config: added Sysbox runtime.\n"
+		 fi
+
+	 elif [[ "$sysbox_runtime" == "disable" ]]; then
+
+		 # Eliminate sysbox's runtime entry if present.
+		 if [ $(jq 'has("runtimes")' ${tmpCfgFile}) = "true" ] &&
+				 [ $(jq '.runtimes | has("sysbox-runc")' ${tmpCfgFile}) = "true" ]; then
+
+			 jq 'del(.runtimes."sysbox-runc")' \
+             ${tmpCfgFile} > ${tmpJqFile} && cp ${tmpJqFile} ${tmpCfgFile}
+
+          docker_runtime_config_changed="true"
+		 fi
+
+		 log "Docker config: removed Sysbox runtime.\n"
+	 fi
+ }
+
+ function docker_config_default_runtime() {
+	 if [ -n  "$default_runtime" ]; then
+		 jq --arg dr $default_runtime '. + {"default-runtime": $dr}' \
+			 ${tmpCfgFile} > ${tmpJqFile} && cp ${tmpJqFile} ${tmpCfgFile}
+
+		 log "Docker config: set default-runtime to $default_runtime.\n"
+	 fi
+ }
+
+ function docker_config_cgroup_driver() {
+
+	 # NOTE: for some reason configuring the cgroup-driver via the
+	 # /etc/docker/daemon.json file does not work (i.e., dockerd does not pick up
+	 # the cgroup driver config). Thus, we resort to configuring via the dockerd
+	 # command line.
+
+	 docker_systemd_unit="/lib/systemd/system/docker.service"
+
+	 if [[ "$cgroup_driver" == "systemd" ]]; then
+
+		 if [ ! -f $docker_systemd_unit ]; then
+			 printf "Error: Docker systemd unit file at $docker_systemd_unit does not exist.\n"
+			 exit 1
+		 fi
+
+		 docker_cmd=$(grep ExecStart $docker_systemd_unit | awk -F "ExecStart=" '{print $2_}')
+
+		 ret=$(echo $docker_cmd | grep "exec-opt native.cgroupdriver=systemd")
+
+		 if [ "$?" -eq 0 ]; then
+			 return
+		 fi
+
+		 docker_cmd_new="${docker_cmd} --exec-opt native.cgroupdriver=systemd"
+		 sed -i "s@${docker_cmd}@${docker_cmd_new}@g" $docker_systemd_unit
+		 log "Docker config: cgroup driver set to $cgroup_driver.\n"
+
+		 systemd_reload_daemon=1
+		 docker_cgroup_config_changed="true"
+	 else
+
+		 if [ ! -f $docker_systemd_unit ]; then
+			 return
+		 fi
+
+		 docker_cmd=$(grep ExecStart $docker_systemd_unit | awk -F "ExecStart=" '{print $2_}')
+
+		 ret=$(echo $docker_cmd | grep "exec-opt native.cgroupdriver=systemd")
+
+		 if [ "$?" -eq 0 ]; then
+			 sed -i "s@--exec-opt native.cgroupdriver=systemd@@g" $docker_systemd_unit
+			 log "Docker config: cgroup driver set to $cgroup_driver.\n"
+			 systemd_reload_daemon=1
+			 docker_cgroup_config_changed="true"
+		 fi
+	 fi
+
+ }
+
+ function docker_config_userns() {
+
+	 if [[ "$userns_remap" == "enable" ]]; then
+		 # If no 'userns-remap' key-entry is present, or if its associated value
+		 # is empty, proceed to create a key and set its value to 'sysbox' user.
+		 # Note that 'jq' does not provide 'in-place' editing capabilities (i.e.
+		 # it displays inconsistent behavior), hence the need for the auxiliar
+		 # 'tmpJqFile'.
+		 if [ $(jq 'has("userns-remap")' ${tmpCfgFile}) = "false" ] ||
+				 [ $(jq '."userns-remap"' ${tmpCfgFile}) = "\"\"" ]; then
+
+			 jq --indent 4 '. + {"userns-remap": "sysbox"}' \
+				 ${tmpCfgFile} > ${tmpJqFile} && cp ${tmpJqFile} ${tmpCfgFile}
+
+			 docker_userns_config_changed="true"
+
+			 log "Docker config: enabled userns-remap.\n"
+		 fi
+	 elif [[ "$userns_remap" == "disable" ]]; then
+
+		 # If present, eliminate the userns-remap entry.
+		 if [ $(jq 'has("userns-remap")' ${tmpCfgFile}) = "true" ]; then
+
+          jq 'del(."userns-remap")' \
+             ${tmpCfgFile} > ${tmpJqFile} && cp ${tmpJqFile} ${tmpCfgFile}
+
+          docker_userns_config_changed="true"
+
+			 log "Docker config: disabled userns-remap.\n"
+		 fi
+	 fi
+ }
+
+ function docker_notify() {
+
+	 # Restart docker if disruptive changes have been made.
+	 if [[ ${docker_userns_config_changed} = "true" ]] ||
+			 [[ ${docker_network_config_changed} = "true" ]] ||
+			 [[ ${docker_cgroup_config_changed} = "true" ]] ||
+			 [[ ${force_restart} -eq 1 ]]; then
+
+		 # Check if Docker is running; otherwise skip
+		 ret=$(pidof $dockerd)
+		 if [ $? -eq 1 ]; then
+			 log "Skipping Docker restart (Docker is not running).\n"
+			 return
+		 fi
+
+		 # If existing containers are found then skip docker-restart to avoid disruption (unless force_restart is set).
+		 ret=$(docker ps -a | wc -l | egrep -q "1$")
+		 if [ $? -ne 0 ] && [ ${force_restart} -ne 1 ]; then
+			 echo -e "\nModified the Docker config but did not restart Docker as there are containers running.\n" \
+					"Please remove them and restart Docker by doing:\n" \
+					"\t\"docker rm \$(docker ps -a -q) -f &&" \
+					"sudo systemctl restart docker\"\n"
+		 else
+			 docker_remove_containers
+
+			 if systemd_host; then
+
+				 if [ "$systemd_reload_daemon" -eq 1 ]; then
+					 systemctl daemon-reload
+					 if [ $? -ne 0 ]; then
+						 printf "Failed to reload the systemd config. Do \"systemctl status\" to get further info."
+						 exit 1
+					 fi
+				 fi
+
+				 systemctl restart docker
+				 if [ $? -ne 0 ]; then
+					 printf "Failed to restart the Docker systemd service unit. Do \"systemctl status docker\" to get further info."
+					 exit 1
+				 fi
+
+			 else
+				 dockerd_manual_restart
+			 fi
+
+			 log "Restarted Docker.\n"
+          return
+		 fi
+	 fi
+
+	 # If non-disruptive changes have been made to docker config, then send it a
+	 # sighup to have its config file getting re-parsed (no need to cold-boot).
+	 if [ ${docker_runtime_config_changed} = true ]; then
+		 kill -SIGHUP $(pidof $dockerd)
+		 log "Notified Docker of config changes.\n"
+	 fi
+ }
+
+ function docker_config() {
+
+    # If the dockerd default config-file exist, copy it to a temp file; we
+    # operate on the temp file and copy it back to the real config file at the
+    # end (unless --dry-run is set).
+	 if [[ -f ${dockerCfgFile} ]]; then
+		 cp ${dockerCfgFile} ${tmpCfgFile}
+	 else
+		 touch ${tmpCfgFile}
+	 fi
+
+    # If there's no content on it, create one with a bare json layout.
+    if [[ ! -s ${tmpCfgFile} ]]; then
+       echo -e "{\n}" > ${tmpCfgFile}
+    fi
+
+	 docker_config_userns
+	 docker_config_runtime
+	 docker_config_default_runtime
+	 docker_config_cgroup_driver
+	 docker_config_network
+
+	 if [ "$dry_run" -eq 1 ]; then
+		 cat ${tmpCfgFile}
+		 return
+	 else
+       mkdir -p ${dockerCfgDir}
+		 mv ${tmpCfgFile} ${dockerCfgFile}
+
+		 log "Wrote to ${dockerCfgFile}.\n"
+	 fi
+
+	 if [ "$config_only" -eq 0 ]; then
+
+		 # Return here if docker is not installed.
+		 if ! command -v docker >/dev/null 2>&1; then
+			 return
+		 fi
+
+		 docker_notify
+	 fi
+ }
+
+ function show_usage() {
+	 printf "\n"
+	 printf "Usage: $progname [OPTIONS]\n"
+	 printf "\n"
+	 printf 'Configures Docker to use Sysbox by changing the "/etc/docker/daemon.json" file\n'
+	 printf 'and restarting Docker as needed. Must run as root.\n'
+	 printf "\n"
+	 printf "Example: $ sudo $progname --sysbox-runtime=enable\n"
+	 printf "\n"
+	 printf "It's best to run this script when no Docker containers are running.\n"
+	 printf "\n"
+	 printf 'Use the "--dry-run" option to see the would-be changes to the Docker\n'
+	 printf 'config without actually changing the config.\n'
+	 printf "\n"
+	 printf "Options:\n"
+	 printf "      --sysbox-runtime=<enable|disable>   Adds or removes the Sysbox runtime to the Docker daemon config and restarts Docker. If ommitted, no change to the runtime config occurs.\n"
+	 printf "      --userns-remap=<enable|disable>     Adds or removes userns-remap mode to the Docker daemon config and restarts Docker. If ommitted, no change to the userns-remap config occurs.\n"
+	 printf "      --default-runtime=<runtime>         Configures the Docker default runtime (e.g., sysbox-runc, runc, etc.) If ommitted, no change to the Docker default runtime is made.\n"
+	 printf "      --bip=<ip-addr>                     Configures the IP address for the docker0 bridge (e.g., 172.20.0.1/16).\n"
+	 printf "      --default-address-pool=<ip-addr>    Configures the starting IP address for user-defined Docker networks (e.g., 172.25.0.0/16).\n"
+	 printf "      --cgroup-driver=<cgroupfs|systemd>  Configures the cgroup driver to be used. If ommitted, no change to the Docker cgroup driver is made.\n"
+	 printf "  -c, --config-only                       Writes to the Docker daemon config file but does not restart Docker. Docker will not pick up the new config until it's restarted.\n"
+	 printf "  -f, --force-restart                     Forces restart of the Docker daemon (even if no config changes have occurred). This will stop and remove any existing Docker containers.\n"
+	 printf "      --dry-run                           Does not modify the Docker config; instead outputs the changes to stdout.\n"
+	 printf "  -v, --verbose                           Enables verbose logging (useful for debugging).\n"
+	 printf "  -h, --help                              Display usage.\n"
+	 printf "\n"
+ }
+
+ function parse_args() {
+	 options=$(getopt -o cvhf -l verbose,help,config-only,dry-run,force-restart,bip:,default-address-pool:,default-runtime:,sysbox-runtime:,userns-remap:,cgroup-driver: -- "$@")
+
+	 eval set -- "$options"
+
+	 while true; do
+		 case "$1" in
+			 -h | --help)
+				 show_usage
+				 exit 1
+				 ;;
+			 -v | --verbose)
+				 verbose=1
+				 ;;
+			 -c | --config-only)
+				 config_only=1
+				 ;;
+			 --dry-run)
+				 dry_run=1
+				 ;;
+			 --sysbox-runtime)
+				 shift;
+				 sysbox_runtime=$1
+				 if [[ ${sysbox_runtime} != "enable" ]] && [[ ${sysbox_runtime} != "disable" ]]; then
+					 printf "\nInvalid value for sysbox-runtime.\n"
+					 show_usage
+					 exit 1
+				 fi
+				 ;;
+			 --userns-remap)
+				 shift;
+				 userns_remap=$1
+				 if [[ ${userns_remap} != "enable" ]] && [[ ${userns_remap} != "disable" ]]; then
+					 printf "\nInvalid value for userns-remap.\n"
+					 show_usage
+					 exit 1
+				 fi
+				 ;;
+			 --bip)
+				 shift;
+				 bip_subnet=$1
+				 ;;
+			 --default-address-pool)
+				 shift;
+				 pool_subnet=$1
+				 ;;
+			 --cgroup-driver)
+				 shift;
+				 cgroup_driver=$1
+				 if [[ ${cgroup_driver} != "cgroupfs" ]] && [[ ${cgroup_driver} != "systemd" ]]; then
+					 printf "\nInvalid value for cgroup-driver.\n"
+					 show_usage
+					 exit 1
+				 fi
+				 ;;
+			 --default-runtime)
+				 shift;
+				 default_runtime=$1
+				 ;;
+			 -f | --force-restart)
+				 force_restart=1
+				 ;;
+			 --)
+				 shift
+				 break
+				 ;;
+			 -*)
+				 show_usage
+				 exit 1
+				 ;;
+			 *)
+				 show_usage
+				 exit 1
+				 ;;
+		 esac
+		 shift
+	 done
+
+	 [[ "$1" == "" ]] || {
+		 show_usage
+		 exit 1
+	 }
+ }
+
+ function main() {
+
+	 parse_args "$@"
+
+	 if [ "$EUID" -ne 0 ]; then
+		 echo "Please run as root."
+		 exit 1
+	 fi
+
+	 docker_config
+
+	 log "Done.\n"
+	 exit 0
+ }
+
+ main "$@"
