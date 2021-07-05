@@ -41,11 +41,8 @@ docker_userns_config_changed="false"
 docker_runtime_config_changed="false"
 docker_cgroup_config_changed="false"
 
-dockerd=$(which dockerd)
-
-# Location of sysbox binaries
-# NOTE: in flatcar, Sysbox is placed in /opt/bin (not in /usr/bin as /usr is read-only).
-sysbox_bin_dir="/opt/bin"
+# In flatcar, dockerd is located in the following path
+dockerd="/run/torcx/bin/dockerd"
 
 # Temp copy of the docker daemon.json file
 tmpCfgFile=$(mktemp /tmp/docker-cfg.XXXXXX)
@@ -244,14 +241,14 @@ function docker_config_network() {
 
 		 # If no 'runtimes' key-entry is present, proceed to add one.
 		 if [ $(jq 'has("runtimes")' ${tmpCfgFile}) = "false" ]; then
-			 jq --indent 4 '. + {"runtimes": {"sysbox-runc": {"path": "${sysbox_bin_dir}/sysbox-runc"}}}' \
+			 jq --indent 4 '. + {"runtimes": {"sysbox-runc": {"path": "/opt/bin/sysbox/sysbox-runc"}}}' \
              ${tmpCfgFile} > ${tmpJqFile} && cp ${tmpJqFile} ${tmpCfgFile}
 
 			 docker_runtime_config_changed="true"
 
 			 # If no 'sysbox-runc' runtime entry is present, proceed to add it.
 		 elif [ $(jq '.runtimes | has("sysbox-runc")' ${tmpCfgFile}) = "false" ]; then
-			 jq --indent 4 '.runtimes |= . + {"sysbox-runc": {"path": "${sysbox_bin_dir}/sysbox-runc"}}' \
+			 jq --indent 4 '.runtimes |= . + {"sysbox-runc": {"path": "/opt/bin/sysbox/sysbox-runc"}}' \
              ${tmpCfgFile} > ${tmpJqFile} && cp ${tmpJqFile} ${tmpCfgFile}
 
 			 docker_runtime_config_changed="true"
@@ -422,7 +419,14 @@ function docker_config_network() {
 	 # If non-disruptive changes have been made to docker config, then send it a
 	 # sighup to have its config file getting re-parsed (no need to cold-boot).
 	 if [ ${docker_runtime_config_changed} = true ]; then
-		 kill -SIGHUP $(pidof $dockerd)
+
+		 ret=$(pidof $dockerd)
+		 if [ $? -eq 1 ]; then
+			 log "Skipping Docker notification (Docker is not running).\n"
+			 return
+		 fi
+
+		 kill -SIGHUP $ret
 		 log "Notified Docker of config changes.\n"
 	 fi
  }
