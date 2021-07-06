@@ -1,10 +1,14 @@
 # Sysbox on Flatcar Preview Repo
 
 This is a preview repository for running the
-[Sysbox](https://github.com/nestybox/sysbox) container runtime on Kinvolk's [Flatcar OS](https://kinvolk.io/flatcar-container-linux/).
+[Sysbox](https://github.com/nestybox/sysbox) container runtime on [Kinvolk's Flatcar OS](https://kinvolk.io/flatcar-container-linux/).
 
 The repo contains Sysbox binaries built specifically for Flatcar, as well as the
 Container Linux configuration yaml needed to install Sysbox on Flatcar.
+
+**NOTE: This is a preview repo while Nestybox tests Sysbox on Flatcar. Once
+testing completes, this repo will be removed and the information here will be
+transferred to the main Sysbox repo.**
 
 ## Contents
 
@@ -18,15 +22,15 @@ Container Linux configuration yaml needed to install Sysbox on Flatcar.
 ## Why Sysbox on Flatcar?
 
 Flatcar is a container-optimized Linux distro, meaning that the OS is designed
-to run workloads inside containers securely.
+to run workloads inside containers efficiently and securely.
 
-Running Sysbox on Flatcar further increases container security, as Sysbox
-enables containers deployed by Docker or Kubernetes to run with stronger
-isolation (Linux user-namespace, procfs and sysfs virtualization, initial mount
-locking, etc.). In addition, Sysbox enables containers to run most workloads
-that run in virtual machines (including systemd, Docker, and even Kubernetes),
-thus enabling new powerful use cases for containers beyond microservice
-deployment.
+Running Sysbox on Flatcar further increases container security and flexibility,
+as Sysbox enables containers deployed by Docker or Kubernetes to run with
+stronger isolation (Linux user-namespace, procfs and sysfs virtualization,
+initial mount locking, etc.). In addition, Sysbox enables containers to run most
+workloads that run in virtual machines (including systemd, Docker, and even
+Kubernetes), thus enabling new powerful use cases for containers beyond
+microservice deployment.
 
 ## Supported Flatcar Releases
 
