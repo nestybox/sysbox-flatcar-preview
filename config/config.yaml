@@ -1,9 +1,3 @@
-passwd:
-  users:
-    - name: core
-      ssh_authorized_keys:
-        - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDH9kgFJYVyns4/dHRaulAOwsgdeGA2EAy3ViZsSxu9VdjDisq4gQQX53TBq0uKaciAnSlTV9tTUNZPMm9U2UkTGOhXJwcf3vfbmWICo9GeTCvSog92wk4cgHM3ZHUs7fUY27EDm47dFH623/ymm8Y+ETazOZYG6TTf4Mx+DLE0a8oWx1W4pBwW66TLM5s/oWQWJDBOPz0Ykwydf3H6x5Wint4/JfwuiBfxjPkMjvhisnOrjX9g72SV6M3a7zR03YEWh5BF8/eibHNF6aw1boke1a
-y1DmEkfeo870M09+Bair634OuHhZdhKdGen1gE6dv2H1UDtmE9nQf2MfNanKXSn4xYly8jUsMmah78jbO61sppCEuUvqNGRDJWUCRk0rK5VKieQo+dCVV0tt9NO9P155DQDXqGmzxk89JG/gy3PYfEykRqTTubA90tqoCNSgWK3us2mzkmJNRY1WRtJDTvCYBssutIUxsLarKUjR0H+7xqeCuAJlG6886jgAaxng8= cesar@focal"
 storage:
   directories:
     - path: /opt/bin/sysbox
