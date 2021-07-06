@@ -1,4 +1,4 @@
-# sysbox-flatcar-preview
+# Sysbox on Flatcar Preview Repo
 
 This is a preview repository for running the
 [Sysbox](https://github.com/nestybox/sysbox) container runtime on Kinvolk's [Flatcar OS](https://kinvolk.io/flatcar-container-linux/).
@@ -6,7 +6,7 @@ This is a preview repository for running the
 The repo contains Sysbox binaries built specifically for Flatcar, as well as the
 Container Linux configuration yaml needed to install Sysbox on Flatcar.
 
-## Why Sysbox on Flatcar
+## Why Sysbox on Flatcar?
 
 Flatcar is a container-optimized Linux distro, meaning that the OS is designed
 to run workloads inside containers securely.
@@ -27,19 +27,32 @@ a Docker host or a Kubernetes node.
 ### Installing Sysbox on Flatcar Docker Hosts
 
 To install Sysbox on a host machine (physical or VM) running Flatcar,
-simply use the Container Linux configuration file [here](config/config.yaml).
+simply use this [Container Linux configuration file](config/config.yaml).
+
+**NOTE**: Add to that file any other configurations you need for the machine
+(e.g., users, ssh keys, etc.).
 
 For example, the steps below show deploy Sysbox on a Google Compute Engine (GCE)
 virtual machine:
 
-1) Convert the config yaml to an Ignition yaml. This is done using the `ct` tool,
+1) Add the ssh authorized key to the [config.yaml](config/config.yaml):
+
+```yaml
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - "ssh-rsa AAAAB3NzaC1yc...
+```
+
+2) Convert the config to the Ignition format. This is done using the `ct` tool,
 as described [in this Kinvolk doc](https://kinvolk.io/docs/flatcar-container-linux/latest/provisioning/config-transpiler/):
 
 ```console
 $ ct --platform=gce < config.yaml > config.ign
 ```
 
-2) Provision the GCE VM and pass the `config.ign` generated in the prior step as "user-data".
+3) Provision the GCE VM and pass the `config.ign` generated in the prior step as "user-data".
 
 ```console
 $ gcloud compute instances create flatcar-vm --image-project kinvolk-public --image-family flatcar-stable --zone us-central1-a --machine-type n2-standard-4 --metadata-from-file user-data=config-sysbox-flatcar-gce.ign
@@ -48,7 +61,8 @@ NAME        ZONE           MACHINE_TYPE   PREEMPTIBLE  INTERNAL_IP    EXTERNAL_I
 flatcar-vm  us-central1-a  n2-standard-4               10.128.15.196  34.132.170.36  RUNNING
 ```
 
-Once the VM boots, Sysbox will be installled and running. You can verify this as follows:
+When the VM boots, Sysbox will be already installed and running. You can verify
+this as follows:
 
 ```console
 core@flatcar-vm ~ $ systemctl status sysbox
@@ -62,13 +76,6 @@ core@flatcar-vm ~ $ systemctl status sysbox
      CGroup: /system.slice/sysbox.service
              ├─1064 /bin/sh -c /opt/bin/sysbox/sysbox-runc --version && /opt/bin/sysbox/sysbox-mgr --version && /opt/bin/sysbox/sysbox-fs --version && /bin/sleep infinity
              └─1084 /bin/sleep infinity
-```
-
-Sysbox will also load the shiftfs module into the kernel:
-
-```console
-core@flatcar-vm ~ $ lsmod | grep shiftfs
-shiftfs                32768  0
 ```
 
 You can now deploy containers with Docker + Sysbox as follows:
@@ -88,7 +95,8 @@ have many usage examples.
 
 ### Installing Sysbox on Flatcar Kubernetes Nodes
 
-This is not yet supported on Flatcar (though it's supported in [other Linux distros](https://github.com/nestybox/sysbox/blob/master/docs/user-guide/install-k8s.md)).
+Though Sysbox supports [installation on K8s nodes](https://github.com/nestybox/sysbox/blob/master/docs/user-guide/install-k8s.md),
+this is not yet supported on K8s nodes using Flatcar.
 
 If you are interested in running Sysbox on Flatcar K8s nodes, please [contact us](#contact) and let us know.
 
