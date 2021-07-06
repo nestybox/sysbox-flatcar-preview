@@ -49,7 +49,7 @@ passwd:
   users:
     - name: core
       ssh_authorized_keys:
-        - "ssh-rsa AAAAB3NzaC1yc...
+        - "ssh-rsa AAAAB3NzaC1yc..."
 ```
 
 2) Convert the config to the Ignition format. This is done using the `ct` tool,
@@ -62,7 +62,7 @@ $ ct --platform=gce < config.yaml > config.ign
 3) Provision the GCE VM and pass the `config.ign` generated in the prior step as "user-data".
 
 ```console
-$ gcloud compute instances create flatcar-vm --image-project kinvolk-public --image-family flatcar-stable --zone us-central1-a --machine-type n2-standard-4 --metadata-from-file user-data=config-sysbox-flatcar-gce.ign
+$ gcloud compute instances create flatcar-vm --image-project kinvolk-public --image-family flatcar-stable --zone us-central1-a --machine-type n2-standard-4 --metadata-from-file user-data=config.ign
 Created [https://www.googleapis.com/compute/v1/projects/predictive-fx-309900/zones/us-central1-a/instances/flatcar-vm].
 NAME        ZONE           MACHINE_TYPE   PREEMPTIBLE  INTERNAL_IP    EXTERNAL_IP    STATUS
 flatcar-vm  us-central1-a  n2-standard-4               10.128.15.196  34.132.170.36  RUNNING
