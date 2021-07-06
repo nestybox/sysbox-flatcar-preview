@@ -6,6 +6,13 @@ This is a preview repository for running the
 The repo contains Sysbox binaries built specifically for Flatcar, as well as the
 Container Linux configuration yaml needed to install Sysbox on Flatcar.
 
+## Contents
+
+*   [Why Sysbox on Flatcar?](#why-sysbox-on-flatcar)
+*   [Installing Sysbox on Flatcar](#installing-sysbox-on-flatcar)
+*   [Contact](#contact)
+*   [Thank You!](#thank-you)
+
 ## Why Sysbox on Flatcar?
 
 Flatcar is a container-optimized Linux distro, meaning that the OS is designed
@@ -90,7 +97,7 @@ For example, to deploy a "VM-like" container that runs Ubuntu Focal + systemd + 
 core@flatcar-vm ~ $ docker run --runtime=sysbox-runc -it --rm nestybox/ubuntu-focal-systemd-docker
 ```
 
-The [Sysbox Quickstart Guide](docs/quickstart/README.md) and [Nestybox blog site](https://blog.nestybox.com/)
+The [Sysbox Quickstart Guide](https://github.com/nestybox/sysbox/tree/master/docs/quickstart) and [Nestybox blog site](https://blog.nestybox.com/)
 have many usage examples.
 
 ### Installing Sysbox on Flatcar Kubernetes Nodes
@@ -108,7 +115,7 @@ Email: contact@nestybox.com
 
 We are available from Monday-Friday, 9am-5pm Pacific Time.
 
-## Thank You
+## Thank You!
 
 We thank you **very much** for using Sysbox on Flatcar! We hope you find it
 interesting and that it helps you use containers in new and more secure and
