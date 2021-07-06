@@ -9,6 +9,7 @@ Container Linux configuration yaml needed to install Sysbox on Flatcar.
 ## Contents
 
 *   [Why Sysbox on Flatcar?](#why-sysbox-on-flatcar)
+*   [Supported Flatcar Releases](#supported-flatcar-releases)
 *   [Installing Sysbox on Flatcar](#installing-sysbox-on-flatcar)
 *   [Contact](#contact)
 *   [Thank You!](#thank-you)
@@ -26,6 +27,10 @@ that run in virtual machines (including systemd, Docker, and even Kubernetes),
 thus enabling new powerful use cases for containers beyond microservice
 deployment.
 
+## Supported Flatcar Releases
+
+* 2765.2.6 (Oklo)
+
 ## Installing Sysbox on Flatcar
 
 The method of installation depends on whether Sysbox is installed on
@@ -39,7 +44,7 @@ simply use this [Container Linux configuration file](config/config.yaml).
 **NOTE**: Add to that file any other configurations you need for the machine
 (e.g., users, ssh keys, etc.).
 
-For example, the steps below show deploy Sysbox on a Google Compute Engine (GCE)
+For example, the steps below deploy Sysbox on a Google Compute Engine (GCE)
 virtual machine:
 
 1) Add the ssh authorized key to the [config.yaml](config/config.yaml):
@@ -68,7 +73,7 @@ NAME        ZONE           MACHINE_TYPE   PREEMPTIBLE  INTERNAL_IP    EXTERNAL_I
 flatcar-vm  us-central1-a  n2-standard-4               10.128.15.196  34.132.170.36  RUNNING
 ```
 
-When the VM boots, Sysbox will be already installed and running. You can verify
+When the VM boots, Sysbox will already be installed and running. You can verify
 this as follows:
 
 ```console
@@ -91,14 +96,19 @@ You can now deploy containers with Docker + Sysbox as follows:
 core@flatcar-vm ~ $ docker run --runtime=sysbox-runc -it --rm <some-image>
 ```
 
-For example, to deploy a "VM-like" container that runs Ubuntu Focal + systemd + Docker inside:
+This will create a container that is strongly secured and is capable of running
+microservices as well as full OS environments (similar to a VM, but with the
+efficiency and speed of containers).
+
+For example, to deploy a "VM-like" container that runs Ubuntu Focal + systemd +
+Docker inside:
 
 ```console
 core@flatcar-vm ~ $ docker run --runtime=sysbox-runc -it --rm nestybox/ubuntu-focal-systemd-docker
 ```
 
-The [Sysbox Quickstart Guide](https://github.com/nestybox/sysbox/tree/master/docs/quickstart) and [Nestybox blog site](https://blog.nestybox.com/)
-have many usage examples.
+Please refer the [Sysbox Quickstart Guide](https://github.com/nestybox/sysbox/tree/master/docs/quickstart) and [Nestybox blog site](https://blog.nestybox.com/)
+for may more usage examples.
 
 ### Installing Sysbox on Flatcar Kubernetes Nodes
 
