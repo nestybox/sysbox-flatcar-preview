@@ -11,6 +11,7 @@ Container Linux configuration yaml needed to install Sysbox on Flatcar.
 *   [Why Sysbox on Flatcar?](#why-sysbox-on-flatcar)
 *   [Supported Flatcar Releases](#supported-flatcar-releases)
 *   [Installing Sysbox on Flatcar](#installing-sysbox-on-flatcar)
+*   [Sysbox Components](#sysbox-components)
 *   [Contact](#contact)
 *   [Thank You!](#thank-you)
 
@@ -38,11 +39,13 @@ a Docker host or a Kubernetes node.
 
 ### Installing Sysbox on Flatcar Docker Hosts
 
-To install Sysbox on a host machine (physical or VM) running Flatcar,
-simply use this [Container Linux configuration file](config/config.yaml).
+To install Sysbox on a host machine (physical or VM) running Flatcar, simply use
+this [Container Linux configuration file](config/config.yaml). This config
+installs the [Sysbox components](#sysbox-components) on the Flatcar
+host.
 
-**NOTE**: Add to that file any other configurations you need for the machine
-(e.g., users, ssh keys, etc.).
+**NOTE**: Add to the config file any other configurations you need for the machine
+(e.g., users, ssh keys, etc.)
 
 For example, the steps below deploy Sysbox on a Google Compute Engine (GCE)
 virtual machine:
@@ -110,12 +113,41 @@ core@flatcar-vm ~ $ docker run --runtime=sysbox-runc -it --rm nestybox/ubuntu-fo
 Please refer the [Sysbox Quickstart Guide](https://github.com/nestybox/sysbox/tree/master/docs/quickstart) and [Nestybox blog site](https://blog.nestybox.com/)
 for may more usage examples.
 
+**NOTE:** If you exclude the `--runtime=sysbox-runc` flag, Docker will launch
+containers with it's default runtime (aka runc). You can have regular Docker
+containers live side-by-side and communicate with Docker + Sysbox containers
+without problem.
+
 ### Installing Sysbox on Flatcar Kubernetes Nodes
 
 Though Sysbox supports [installation on K8s nodes](https://github.com/nestybox/sysbox/blob/master/docs/user-guide/install-k8s.md),
 this is not yet supported on K8s nodes using Flatcar.
 
 If you are interested in running Sysbox on Flatcar K8s nodes, please [contact us](#contact) and let us know.
+
+## Sysbox Components
+
+The [config.yaml](config/config.yaml) performs the following configurations on a Flatcar host:
+
+* Places the Sysbox binaries in a directory called `/opt/bin/sysbox`. The binaries include:
+
+  - sysbox-mgr, sysbox-runc, sysbox-fs, the `shiftfs` module, and `fusermount`.
+
+* Loads the `shiftfs` module into the kernel.
+
+  - This module is present in Ubuntu kernels, but typically not present on other
+    distros. It brings multiple functional benefits, such as giving Sysbox the
+    ability to isolate containers with the Linux user-namespace without changes
+    in Docker's configuration. More on shiftfs [here](https://github.com/nestybox/sysbox/blob/master/docs/user-guide/design.md#ubuntu-shiftfs-module).
+
+* Configures some kernel sysctl parameters (the config.yaml has the details).
+
+* Installs and starts the Sysbox systemd units.
+
+* Configures Docker to learn about Sysbox and restarts Docker.
+
+The result is that the host is fully configured to run Docker containers
+with Sysbox.
 
 ## Contact
 
